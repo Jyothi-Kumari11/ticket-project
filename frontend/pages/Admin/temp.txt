@@ -1,0 +1,499 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useApp } from '../../context/AppContext';
+import {
+  ArrowLeft,
+  MessageSquare,
+  Lock,
+  Send,
+  User,
+  Shield,
+  Trash2,
+  CheckCircle2,
+  Clock,
+  Download,
+  AlertTriangle,
+  FileText,
+  Tag,
+  UserCheck,
+  Sparkles,
+  Printer,
+  Eye,
+  Zap,
+  ChevronDown
+} from 'lucide-react';
+import StatusBadge from '../../components/StatusBadge';
+import PriorityBadge from '../../components/PriorityBadge';
+import Timeline from '../../components/Timeline';
+import { SlaProgressCard } from '../../components/SlaTimer';
+import { AttachmentModal } from '../../components/AttachmentModal';
+import { IncidentReportModal } from '../../components/IncidentReportModal';
+import { generateAIReply } from '../../utils/aiHelper';
+import { api } from '../../services/api';
+
+const AdminTicketDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const {
+    tickets,
+    updateTicketStatus,
+    addComment,
+    requestTicketDeletion,
+    permanentlyDeleteTicket,
+    currentUser,
+    showToast
+  } = useApp();
+
+  const [activeTab, setActiveTab] = useState('public'); // 'public' or 'internal'
+  const [replyText, setReplyText] = useState('');
+  const [previewAttachment, setPreviewAttachment] = useState(null);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showAiMenu, setShowAiMenu] = useState(false);
+
+  // Deletion workflow state
+  const [deletionStatus, setDeletionStatus] = useState(null);
+  const [loadingDeletion, setLoadingDeletion] = useState(false);
+  const [showDeleteRequestModal, setShowDeleteRequestModal] = useState(false);
+  const [showPermanentDeleteModal, setShowPermanentDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const ticket = tickets.find((t) => t.ticketId === id);
+
+  // Fetch deletion status for this ticket
+  useEffect(() => {
+    if (!ticket?.ticketId) return;
+    let isMounted = true;
+    const fetchDeletionStatus = async () => {
+      try {
+        const res = await api.getDeletionStatus(ticket.ticketId);
+        if (isMounted && res?.data) {
+          setDeletionStatus(res.data);
+        } else if (isMounted) {
+          setDeletionStatus(null);
+        }
+      } catch (err) {
+        console.warn('Error fetching deletion status:', err.message);
+      }
+    };
+    fetchDeletionStatus();
+    return () => { isMounted = false; };
+  }, [ticket?.ticketId]);
+
+  if (!ticket) {
+    return (
+      <div className="card text-center" style={{ padding: '4rem 2rem' }}>
+        <h2>Ticket Record Not Found</h2>
+        <p style={{ color: '#64748B', margin: '1rem 0 2rem' }}>
+          The requested ticket <strong>{id}</strong> is not available or was deleted with user consent.
+        </p>
+        <Link to="/app/admin/tickets" className="btn btn-primary btn-md">
+          Return to All Tickets
+        </Link>
+      </div>
+    );
+  }
+
+  const agents = ['Support Team', 'Sarah Connor', 'Marcus Vance', 'Finance Ops', 'DevOps Team'];
+  const statuses = ['Open', 'In Progress', 'Waiting for User', 'Resolved', 'Closed'];
+  const priorities = ['Low', 'Medium', 'High', 'Critical'];
+
+  const isPending = deletionStatus?.status === 'pending';
+  const isApproved = deletionStatus?.status === 'approved';
+  const isRejected = deletionStatus?.status === 'rejected';
+
+  const handleStatusChange = (newStatus) => {
+    updateTicketStatus(ticket.ticketId, newStatus);
+  };
+
+  const handleSendNoteOrReply = (e) => {
+    e.preventDefault();
+    if (!replyText.trim()) return;
+    const isInternal = activeTab === 'internal';
+    addComment(ticket.ticketId, replyText.trim(), isInternal);
+    setReplyText('');
+  };
+
+  const handleConfirmRequestDeletion = async () => {
+    try {
+      setLoadingDeletion(true);
+      await requestTicketDeletion(ticket.ticketId);
+      setShowDeleteRequestModal(false);
+      // Refresh status
+      const res = await api.getDeletionStatus(ticket.ticketId);
+      if (res?.data) setDeletionStatus(res.data);
+    } catch (err) {
+      showToast(err.message || 'Failed to send deletion request', 'error');
+    } finally {
+      setLoadingDeletion(false);
+    }
+  };
+
+  const handleExecutePermanentDelete = async () => {
+    try {
+      setIsDeleting(true);
+      await permanentlyDeleteTicket(ticket.ticketId);
+      setShowPermanentDeleteModal(false);
+      navigate('/app/admin/tickets');
+    } catch (err) {
+      showToast(err.message || 'Deletion failed: Backend security rejected request', 'error');
+      setIsDeleting(false);
+    }
+  };
+
+  const handleAiDraft = (promptType) => {
+    const draft = generateAIReply(ticket, promptType);
+    if (promptType === 'internal_summary') {
+      setActiveTab('internal');
+      setReplyText(draft);
+    } else {
+      setActiveTab('public');
+      setReplyText(draft);
+    }
+    setShowAiMenu(false);
+    showToast('AI Draft generated! Review and edit before sending.', 'info');
+  };
+  // Build ticket timeline from ticket data
+  const timelineSteps = [
+    { label: 'Ticket Submitted', date: ticket.createdAt ? new Date(ticket.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '', done: true },
+    { label: 'Viewed by Team', date: ticket.createdAt ? new Date(new Date(ticket.createdAt).getTime() + 15*60000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '', done: ticket.status !== 'Open' },
+    { label: 'In Progress', date: ticket.status !== 'Open' ? new Date(new Date(ticket.createdAt).getTime() + 35*60000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '', done: ['In Progress','Waiting for User','Resolved','Closed'].includes(ticket.status), active: ticket.status === 'In Progress' },
+    { label: 'Resolved', date: '', done: ['Resolved','Closed'].includes(ticket.status), pending: !['Resolved','Closed'].includes(ticket.status) },
+    { label: 'Closed', date: '', done: ticket.status === 'Closed', pending: ticket.status !== 'Closed' },
+  ];
+
+  const getInitials = (name) => name ? name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase() : 'U';
+
+  return (
+    <div className="td-page">
+
+      {/* --- Ticket Timeline Sidebar (inside main layout) --- */}
+      <div className="td-timeline-sidebar">
+        <div className="td-timeline-title">
+          <Clock size={15} />
+          Ticket Timeline
+        </div>
+        <div className="td-timeline-list">
+          {timelineSteps.map((step, idx) => (
+            <div key={idx} className={`td-tl-item ${step.done ? 'done' : ''} ${step.active ? 'active' : ''} ${step.pending ? 'pending' : ''}`}>
+              {idx < timelineSteps.length - 1 && <div className="td-tl-line" />}
+              <div className="td-tl-dot">
+                {step.done && !step.active ? <CheckCircle2 size={14} /> : <span />}
+              </div>
+              <div className="td-tl-body">
+                <div className="td-tl-label">{step.label}</div>
+                {step.date ? <div className="td-tl-date">{step.date}</div> : <div className="td-tl-date td-tl-pending-txt">{step.pending ? 'Pending' : ''}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* --- Main Content --- */}
+      <div className="td-main">
+
+        {/* Back link + action buttons */}
+        <div className="td-top-nav">
+          <Link to="/app/admin/tickets" className="td-back-link">
+            <ArrowLeft size={15} /> Back to Ticket Console
+          </Link>
+          <div className="td-action-btns">
+            <button className="td-btn td-btn-primary" onClick={() => setShowReportModal(true)}>
+              <Printer size={15} /> Generate Incident Report
+            </button>
+            {isApproved ? (
+              <button className="td-btn td-btn-danger" onClick={() => setShowPermanentDeleteModal(true)}>
+                <Trash2 size={15} /> Permanently Delete
+              </button>
+            ) : isPending ? (
+              <button className="td-btn td-btn-outline" disabled>
+                <Clock size={15} /> Deletion Pending
+              </button>
+            ) : (
+              <button className="td-btn td-btn-outline" onClick={() => setShowDeleteRequestModal(true)}>
+                <Trash2 size={15} /> Delete Ticket
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Security banners */}
+        {isPending && (
+          <div className="td-banner td-banner-warn">
+            <Clock size={18} /> <span><strong>Customer Deletion Permission Pending</strong> — A deletion request was sent to {ticket.userName || ticket.userEmail}. The ticket remains active until they respond.</span>
+          </div>
+        )}
+        {isApproved && (
+          <div className="td-banner td-banner-success">
+            <CheckCircle2 size={18} /> <span><strong>Customer Deletion Consent Granted ?</strong> — Approved on {new Date(deletionStatus.respondedAt).toLocaleString()}.</span>
+            <button className="td-btn td-btn-danger" onClick={() => setShowPermanentDeleteModal(true)} style={{marginLeft:'auto'}}>Execute Deletion</button>
+          </div>
+        )}
+
+        {/* Ticket ID + Title + badges */}
+        <div className="td-ticket-header">
+          <span className="td-ticket-id">{ticket.ticketId}</span>
+          <h1 className="td-ticket-title">{ticket.subject}</h1>
+          <div className="td-badges-row">
+            <div className={`td-priority-badge ${ticket.priority === 'High' || ticket.priority === 'Critical' ? 'high' : ticket.priority === 'Medium' ? 'med' : 'low'}`}>
+              <span className="td-priority-dot" />
+              {ticket.priority} <ChevronDown size={12} />
+            </div>
+            <div className="td-status-badge">{ticket.status}</div>
+          </div>
+        </div>
+
+        {/* Description summary line */}
+        <div className="td-desc-line">{ticket.description}</div>
+
+        {/* Metadata row */}
+        <div className="td-meta-row">
+          <div className="td-meta-item">
+            <span className="td-meta-icon"><Clock size={13} /></span>
+            <div><div className="td-meta-label">Created</div><div className="td-meta-val">{new Date(ticket.createdAt).toLocaleString([], { dateStyle: 'long', timeStyle: 'short' })}</div></div>
+          </div>
+          <div className="td-meta-divider" />
+          <div className="td-meta-item">
+            <span className="td-meta-icon"><User size={13} /></span>
+            <div><div className="td-meta-label">Customer</div><div className="td-meta-val">{ticket.userName} ({ticket.userEmail})</div></div>
+          </div>
+          <div className="td-meta-divider" />
+          <div className="td-meta-item">
+            <span className="td-meta-icon"><Tag size={13} /></span>
+            <div><div className="td-meta-label">Category</div><div className="td-meta-val">{ticket.category}</div></div>
+          </div>
+        </div>
+
+        {/* Conversation card */}
+        <div className="td-card">
+          <div className="td-card-title">
+            <MessageSquare size={17} /> Conversation
+            <button className="td-view-notes-btn" onClick={() => setActiveTab(activeTab === 'internal' ? 'public' : 'internal')}>
+              <Eye size={13} /> {activeTab === 'internal' ? 'View public' : 'View internal notes'}
+            </button>
+          </div>
+
+          {(!ticket.comments || ticket.comments.filter(c => activeTab === 'internal' ? c.isInternal : !c.isInternal).length === 0) ? (
+            <div className="td-empty-convo">
+              <Sparkles size={18} /> No messages yet. Use the composer below to reply.
+            </div>
+          ) : (
+            <div className="td-convo-list">
+              {ticket.comments.filter(c => activeTab === 'internal' ? c.isInternal : !c.isInternal).map((c) => (
+                <div key={c.id} className={`td-msg ${c.role === 'admin' ? 'td-msg-admin' : 'td-msg-user'}`}>
+                  <div className={`td-msg-avatar ${c.role === 'admin' ? 'admin' : 'user'}`}>{getInitials(c.sender)}</div>
+                  <div className="td-msg-body">
+                    <div className="td-msg-header">
+                      <strong className="td-msg-name">{c.sender}</strong>
+                      <span className="td-msg-time">{c.timestamp}</span>
+                    </div>
+                    <div className="td-msg-text">{c.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Composer */}
+          <form onSubmit={handleSendNoteOrReply} className="td-composer">
+            <div className="td-composer-top">
+              <div className="td-composer-avatar"><User size={16} /></div>
+              <textarea
+                className="td-composer-input"
+                placeholder="Type your reply..."
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+              />
+              <button type="submit" className="td-send-btn">
+                <Send size={16} />
+              </button>
+            </div>
+            <div className="td-composer-toolbar">
+              <button type="button" className="td-toolbar-btn" title="Attachment"><FileText size={15} /></button>
+              <button type="button" className="td-toolbar-btn" title="Emoji">??</button>
+              <button type="button" className="td-toolbar-btn" title="Format"><span style={{fontWeight:700,fontSize:12}}>A</span></button>
+              <div style={{marginLeft:'auto', position:'relative'}}>
+                <button type="button" className="td-ai-btn" onClick={() => setShowAiMenu(!showAiMenu)}>
+                  <Sparkles size={13} /> AI Copilot Draft <ChevronDown size={12} />
+                </button>
+                {showAiMenu && (
+                  <div className="td-ai-menu">
+                    <div className="td-ai-menu-header">Generate Response</div>
+                    <div className="td-ai-menu-item" onClick={() => handleAiDraft('empathetic_greeting')}>Empathetic Greeting &amp; Triage</div>
+                    <div className="td-ai-menu-item" onClick={() => handleAiDraft('request_logs')}>Request Diagnostic Logs</div>
+                    <div className="td-ai-menu-item" onClick={() => handleAiDraft('resolution_notice')}>Resolution Notice</div>
+                    <div className="td-ai-menu-item" onClick={() => handleAiDraft('internal_summary')}>Internal Summary</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {/* --- Right Sidebar --- */}
+      <div className="td-right-sidebar">
+
+        {/* Customer Info */}
+        <div className="td-sidebar-card">
+          <div className="td-sidebar-card-title"><User size={15} /> Customer Info</div>
+          <div className="td-customer-avatar-row">
+            <div className="td-cust-avatar">{getInitials(ticket.userName)}</div>
+            <div>
+              <div className="td-cust-name">{ticket.userName}</div>
+              <div className="td-cust-role">?? Customer</div>
+            </div>
+          </div>
+          <div className="td-cust-details">
+            <div className="td-cust-detail-row"><span className="td-cust-icon"><FileText size={13} /></span><span className="td-cust-detail-label">Email</span><span className="td-cust-detail-val">{ticket.userEmail}</span></div>
+            <div className="td-cust-detail-row"><span className="td-cust-icon"><Tag size={13} /></span><span className="td-cust-detail-label">Customer ID</span><span className="td-cust-detail-val">12345</span></div>
+            <div className="td-cust-detail-row"><span className="td-cust-icon"><Clock size={13} /></span><span className="td-cust-detail-label">Phone</span><span className="td-cust-detail-val">+91 98765 43210</span></div>
+          </div>
+        </div>
+
+        {/* SLA Compliance Tracker */}
+        <div className="td-sidebar-card">
+          <div className="td-sidebar-card-title"><Clock size={15} /> SLA Compliance Tracker</div>
+          <div className="td-sla-row">
+            <span className="td-sla-label"><Zap size={14} /> SLA Target</span>
+            <span className="td-sla-val">6 Hours</span>
+          </div>
+          <div className="td-sla-row">
+            <span className="td-sla-label"><AlertTriangle size={14} color="#EF4444" /> Breached by</span>
+            <span className="td-sla-val td-sla-breach">14h</span>
+          </div>
+        </div>
+
+        {/* Ticket Workflow State */}
+        <div className="td-sidebar-card">
+          <div className="td-sidebar-card-title"><CheckCircle2 size={15} /> Ticket Workflow State</div>
+          <div className="td-workflow-bar">
+            <div className="td-wf-track" />
+            <div className="td-wf-progress" style={{
+              width: ticket.status === 'Open' ? '0%' :
+                     ticket.status === 'In Progress' ? '25%' :
+                     ticket.status === 'Waiting for User' ? '50%' :
+                     ticket.status === 'Resolved' ? '75%' : '100%'
+            }} />
+            {['Open','In Progress','Waiting for User','Resolved','Closed'].map((s, i) => {
+              const currentIdx = statuses.indexOf(ticket.status);
+              const done = i < currentIdx;
+              const active = i === currentIdx;
+              return (
+                <div key={s} className={`td-wf-step ${done ? 'done' : ''} ${active ? 'active' : ''}`}>
+                  <div className="td-wf-dot">{done ? <CheckCircle2 size={13}/> : ''}</div>
+                  <span className="td-wf-label">{s}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{textAlign:'center', marginTop:'10px'}}>
+            <span className="td-status-pill">{ticket.status}</span>
+          </div>
+        </div>
+
+        {/* Assignment Specialist */}
+        <div className="td-sidebar-card">
+          <div className="td-sidebar-card-title"><UserCheck size={15} /> Assignment Specialist</div>
+          <div className="td-select-wrap">
+            <User size={15} className="td-select-icon" />
+            <select
+              className="td-select"
+              value={ticket.assignedTo || 'Support Team'}
+              onChange={(e) => {
+                updateTicketStatus(ticket.ticketId, ticket.status, e.target.value);
+                showToast(`Assigned to ${e.target.value}`, 'success');
+              }}
+            >
+              {agents.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <ChevronDown size={14} className="td-select-chevron" />
+          </div>
+        </div>
+      </div>
+
+      {/* Modals */}
+      {previewAttachment && <AttachmentModal attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />}
+      {showReportModal && <IncidentReportModal ticket={ticket} onClose={() => setShowReportModal(false)} />}
+
+      {/* Delete Request Modal */}
+      {showDeleteRequestModal && (
+        <div className="modal-backdrop" onClick={() => setShowDeleteRequestModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#FEE2E2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Shield size={18} color="#DC2626" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Security Rule: Customer Consent Required</h3>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Ticket Deletion Security Policy</span>
+                </div>
+              </div>
+            </div>
+            <div className="modal-body" style={{ padding: '16px 0' }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 12px' }}>
+                In compliance with customer privacy and security policies, an <strong>Administrator cannot permanently delete a customer's ticket directly</strong>.
+              </p>
+              <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '6px', padding: '12px', fontSize: '12px', color: '#475569', marginBottom: '14px' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px', color: '#1E293B' }}>Enforced Workflow:</div>
+                <ul style={{ margin: 0, paddingLeft: '18px', lineHeight: 1.5 }}>
+                  <li>A deletion consent notification is sent to <strong>{ticket.userName || ticket.userEmail}</strong>.</li>
+                  <li>The ticket remains completely active and unchanged.</li>
+                  <li>Permanent deletion can only occur after the customer explicitly approves.</li>
+                </ul>
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748B', margin: 0 }}>
+                Target Ticket: <strong>{ticket.ticketId}</strong> — "{ticket.subject}"
+              </p>
+            </div>
+            <div className="modal-footer" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowDeleteRequestModal(false)} disabled={loadingDeletion}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={handleConfirmRequestDeletion} disabled={loadingDeletion} style={{ backgroundColor: '#2563EB', borderColor: '#2563EB' }}>
+                {loadingDeletion ? 'Sending Request...' : 'Send Deletion Request to Customer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Modal */}
+      {showPermanentDeleteModal && (
+        <div className="modal-backdrop" onClick={() => setShowPermanentDeleteModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#FEE2E2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Trash2 size={18} color="#DC2626" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#DC2626' }}>Confirm Permanent Deletion</h3>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Irreversible Database Action</span>
+                </div>
+              </div>
+            </div>
+            <div className="modal-body" style={{ padding: '16px 0' }}>
+              <div style={{ background: '#ECFDF5', border: '1px solid #10B981', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', color: '#065F46', marginBottom: '14px' }}>
+                ? <strong>Customer Authorization Verified:</strong> Customer <strong>{deletionStatus?.customerName}</strong> granted deletion consent.
+              </div>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 8px' }}>
+                Are you sure you want to permanently delete ticket <strong>{ticket.ticketId}</strong>?
+              </p>
+              <p style={{ fontSize: '12px', color: '#DC2626', margin: 0 }}>
+                ?? <strong>Warning:</strong> All comments, attachments, timeline history, and records will be permanently removed. This action cannot be undone.
+              </p>
+            </div>
+            <div className="modal-footer" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowPermanentDeleteModal(false)} disabled={isDeleting}>Cancel</button>
+              <button type="button" className="btn btn-danger" onClick={handleExecutePermanentDelete} disabled={isDeleting} style={{ backgroundColor: '#DC2626', borderColor: '#DC2626' }}>
+                {isDeleting ? 'Deleting...' : 'Permanently Delete Ticket'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default AdminTicketDetail;
