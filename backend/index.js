@@ -87,6 +87,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: err.message || 'Internal Server Error' });
 });
 
+// Serve Frontend in Production
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../dist')));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../dist/index.html'));
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 ResolveDesk API Server running at http://localhost:${PORT}`);
   console.log(`   Auth endpoints available at http://localhost:${PORT}/api/auth`);
