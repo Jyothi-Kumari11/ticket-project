@@ -19,12 +19,14 @@ const PORT = process.env.PORT || 5001;
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow any localhost port during development
-    if (!origin || origin.startsWith('http://localhost:')) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error('Origin is not allowed by CORS'));
+    // Allow requests with no origin (like mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    // Allow localhost during development
+    if (origin.startsWith('http://localhost:')) return callback(null, true);
+    // Allow Render deployment domains
+    if (origin.endsWith('.onrender.com')) return callback(null, true);
+    // Allow same origin (production)
+    callback(null, true);
   },
   credentials: true
 }));
@@ -96,7 +98,7 @@ const __dirname = path.dirname(__filename);
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../dist')));
-  app.get('*', (req, res) => {
+  app.get(/(.*)/, (req, res) => {
     res.sendFile(path.join(__dirname, '../dist/index.html'));
   });
 }
